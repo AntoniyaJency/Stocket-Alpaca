@@ -5,7 +5,7 @@ const http       = require("http");
 const WebSocket  = require("ws");
 const rateLimit  = require("express-rate-limit");
 const Alpaca     = require("@alpacahq/alpaca-trade-api");
-const OpenAI     = require("openai");
+const Groq        = require("groq-sdk");
 const { register, login, authMiddleware } = require("./auth");
 const { computeAll } = require("./indicators");
 
@@ -33,7 +33,7 @@ const alpaca = new Alpaca({
   feed: "iex",
   baseUrl: IS_PAPER ? 'https://paper-api.alpaca.markets' : 'https://api.alpaca.markets'
 });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ── State ────────────────────────────────────────────────────────────────────
 let autoEnabled       = process.env.AUTO_TRADE_ENABLED === "true";
@@ -198,8 +198,9 @@ Required output — strict JSON only, no markdown:
 {"signal":"BUY"|"SELL"|"HOLD","confidence":0-100,"reason":"max 12 words","target":number,"stopLoss":number,"strategy":"${STRATEGY}","indicators":{"rsi":${ind.rsi14.toFixed(1)},"macdHist":${ind.macdHist.toFixed(4)},"bbPosition":${ind.bbPosition?.toFixed(0)}}}`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4",
+    // Use Groq for faster, cheaper trading signals
+    const response = await groq.chat.completions.create({
+      model: "llama-3.1-70b-versatile",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 250,
     });
