@@ -57,7 +57,7 @@ export default function App() {
       <div className="login-card">
         <div className="login-scanline" />
         <div className="login-logo-container">
-          <img src="/logo.svg" alt="Stocket Logo" className="login-logo-img" />
+          <img src="/logo.png" alt="Stocket Logo" className="login-logo-img" />
           <div className="login-logo-text">STOCKET</div>
         </div>
         <div className="login-sub">TRADE SMART.INVEST WISE<span className="blink-cursor">_</span></div>

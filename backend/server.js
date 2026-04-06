@@ -200,7 +200,7 @@ Required output — strict JSON only, no markdown:
   try {
     // Use Groq for faster, cheaper trading signals
     const response = await groq.chat.completions.create({
-      model: "llama-3.1-70b-versatile",
+      model: "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 250,
     });
