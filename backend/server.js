@@ -59,17 +59,41 @@ const wss = new WebSocket.Server({ server });
 const wsClients = new Set();
 
 wss.on("connection", (ws) => {
+  console.log("🔌 New WebSocket connection established");
   wsClients.add(ws);
   // Hydrate new client
-  if (Object.keys(priceCache).length) ws.send(JSON.stringify({ type: "PRICE_SNAPSHOT", data: priceCache }));
-  if (Object.keys(signalCache).length) ws.send(JSON.stringify({ type: "SIGNAL_SNAPSHOT", data: signalCache }));
+  if (Object.keys(priceCache).length) {
+    console.log("📊 Sending price snapshot to new client");
+    ws.send(JSON.stringify({ type: "PRICE_SNAPSHOT", data: priceCache }));
+  }
+  if (Object.keys(signalCache).length) {
+    console.log("📡 Sending signal snapshot to new client");
+    ws.send(JSON.stringify({ type: "SIGNAL_SNAPSHOT", data: signalCache }));
+  }
   ws.send(JSON.stringify({ type: "AUTO_TRADE_STATUS", data: { enabled: autoEnabled, stats: autoStats } }));
-  ws.on("close", () => wsClients.delete(ws));
+  ws.on("close", () => {
+    console.log("🔌 WebSocket connection closed");
+    wsClients.delete(ws);
+  });
+  ws.on("error", (err) => {
+    console.log("❌ WebSocket error:", err.message);
+  });
 });
 
 function broadcast(type, data) {
   const msg = JSON.stringify({ type, data, ts: Date.now() });
-  wsClients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(msg); });
+  const activeClients = Array.from(wsClients).filter(ws => ws.readyState === WebSocket.OPEN);
+  console.log(`📡 Broadcasting ${type} to ${activeClients.length} clients:`, data.sym || 'all');
+  
+  activeClients.forEach(ws => {
+    try {
+      ws.send(msg);
+    } catch (err) {
+      console.log(`❌ Failed to send to client:`, err.message);
+      // Remove problematic client
+      wsClients.delete(ws);
+    }
+  });
 }
 
 // ── Alpaca real-time stream ──────────────────────────────────────────────────
@@ -127,24 +151,81 @@ function startAlpacaStream() {
 // ── Fallback quote fetching ───────────────────────────────────────────────────
 async function fetchQuotesFallback() {
   try {
-    const snaps = await alpaca.getSnapshots(WATCHLIST);
-    for (const [sym, s] of Object.entries(snaps)) {
-      const price = s.latestTrade?.p || s.minuteBar?.c || 0;
-      if (price > 0) {
-        const prevClose = s.prevDailyBar?.c || price;
-        priceCache[sym] = {
-          sym, price,
-          bid: price * 0.999, ask: price * 1.001, // Approximate bid/ask
-          spread: +(price * 0.002).toFixed(4),
-          change: +(price - prevClose).toFixed(2),
-          changePct: prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(3) : 0,
-          volume: s.dailyBar?.v || 0,
-          prevClose,
-          ts: Date.now(),
-        };
-        broadcast("QUOTE", { sym, ...priceCache[sym] });
+    console.log('Fetching quotes for:', WATCHLIST);
+    for (const sym of WATCHLIST) {
+      try {
+        // Get individual snapshot for each symbol
+        const snapshot = await alpaca.getSnapshot(sym);
+        
+        // Use correct field names from the actual data structure
+        let price = 0, bid = 0, ask = 0, prevClose = 0;
+        
+        // Method 1: Use latest trade if available
+        if (snapshot.LatestTrade && snapshot.LatestTrade.Price) {
+          price = snapshot.LatestTrade.Price;
+          console.log(`Using LatestTrade for ${sym}: ${price}`);
+        }
+        
+        // Method 2: Use latest quote bid/ask
+        if (snapshot.LatestQuote) {
+          bid = snapshot.LatestQuote.BidPrice || 0;
+          ask = snapshot.LatestQuote.AskPrice || 0;
+          if (price === 0 && bid > 0 && ask > 0) {
+            price = (bid + ask) / 2;
+            console.log(`Using LatestQuote for ${sym}: ${price} (bid: ${bid}, ask: ${ask})`);
+          }
+        }
+        
+        // Method 3: Use daily bar close
+        if (snapshot.DailyBar && snapshot.DailyBar.ClosePrice) {
+          prevClose = snapshot.DailyBar.ClosePrice;
+          if (price === 0) price = prevClose;
+          console.log(`Using DailyBar for ${sym}: ${price}`);
+        }
+        
+        // Method 4: Use previous daily bar for comparison
+        if (snapshot.PrevDailyBar && snapshot.PrevDailyBar.ClosePrice && prevClose === 0) {
+          prevClose = snapshot.PrevDailyBar.ClosePrice;
+          console.log(`Using PrevDailyBar for ${sym}: ${prevClose}`);
+        }
+        
+        // Update cache if we got valid data
+        if (sym && price > 0) {
+          const change = prevClose > 0 ? price - prevClose : 0;
+          const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+          
+          priceCache[sym] = {
+            ...priceCache[sym], sym,
+            price: +price.toFixed(2), 
+            bid: +bid.toFixed(2), 
+            ask: +ask.toFixed(2),
+            spread: bid > 0 && ask > 0 ? +(ask - bid).toFixed(4) : 0,
+            change: +change.toFixed(2),
+            changePct: +changePct.toFixed(3),
+            open: prevClose || price, // Use prev close as open for now
+            high: price, // Current price as high for now
+            low: price,  // Current price as low for now
+            close: price,
+            prevClose: prevClose || price,
+            volume: 0, // Will be updated when we get volume data
+            ts: Date.now(),
+          };
+          
+          console.log(`✅ Updated ${sym}: $${price} (${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}%)`);
+          broadcast("QUOTE", priceCache[sym]);
+        } else {
+          console.log(`❌ No valid data for ${sym} - price: ${price}, bid: ${bid}, ask: ${ask}`);
+        }
+        
+      } catch (symErr) {
+        console.error(`Error fetching ${sym}:`, symErr.message);
       }
     }
+    
+    // Log current cache status for debugging
+    console.log(`📊 Current price cache has ${Object.keys(priceCache).length} symbols`);
+    console.log(`🔌 Active WebSocket clients: ${Array.from(wsClients).filter(ws => ws.readyState === WebSocket.OPEN).length}`);
+    
   } catch (err) {
     console.error("Fallback quotes error:", err.message);
   }
@@ -342,14 +423,34 @@ app.post("/api/auth/login", (req, res) => {
 
 // ── Protected API routes ──────────────────────────────────────────────────────
 // Health (public)
-app.get("/api/health", (req, res) => res.json({
-  status: "ok", mode: IS_PAPER ? "paper" : "live",
-  autoTrading: autoEnabled, strategy: STRATEGY,
-  minConfidence: MIN_CONF,
-  alpacaKeySet: !!(process.env.ALPACA_KEY_ID && process.env.ALPACA_KEY_ID !== "YOUR_ALPACA_KEY_ID"),
-  openaiKeySet: !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "YOUR_OPENAI_API_KEY"),
-  watchlist: WATCHLIST, marketOpen: isMarketHours(), ts: Date.now(),
-}));
+app.get("/api/health", (req, res) => {
+  const now = new Date();
+  const istTime = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+  const estTime = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+  const marketOpen = isMarketHours();
+  
+  res.json({
+    status: "ok", 
+    mode: IS_PAPER ? "paper" : "live",
+    autoTrading: autoEnabled, 
+    strategy: STRATEGY,
+    minConfidence: MIN_CONF,
+    alpacaKeySet: !!(process.env.ALPACA_KEY_ID && process.env.ALPACA_KEY_ID !== "YOUR_ALPACA_KEY_ID"),
+    groqKeySet: !!(process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== "YOUR_GROQ_API_KEY"),
+    watchlist: WATCHLIST, 
+    marketOpen: marketOpen,
+    currentTime: {
+      ist: istTime,
+      est: estTime,
+      timestamp: now.getTime()
+    },
+    nextSession: marketOpen ? null : {
+      opensAt: "9:30 AM EST (7:00 PM IST)",
+      closesAt: "4:00 PM EST (1:30 AM IST)"
+    },
+    ts: Date.now(),
+  });
+});
 
 app.get("/api/account", authMiddleware, async (req, res) => {
   try {
@@ -414,19 +515,42 @@ app.get("/api/bars/:symbol/indicators", authMiddleware, async (req, res) => {
 app.get("/api/quotes", authMiddleware, async (req, res) => {
   try {
     const syms = (req.query.symbols || WATCHLIST.join(",")).split(",");
-    const snaps = await alpaca.getSnapshots(syms);
     const result = {};
-    for (const [sym, s] of Object.entries(snaps)) {
-      result[sym] = {
-        sym, price: s.latestTrade?.p || s.minuteBar?.c || 0,
-        open: s.dailyBar?.o || 0, high: s.dailyBar?.h || 0,
-        low: s.dailyBar?.l || 0, close: s.dailyBar?.c || 0,
-        prevClose: s.prevDailyBar?.c || 0, volume: s.dailyBar?.v || 0,
-        change: (s.dailyBar?.c || 0) - (s.prevDailyBar?.c || 0),
-        changePct: s.prevDailyBar?.c ? (((s.dailyBar?.c - s.prevDailyBar?.c) / s.prevDailyBar?.c) * 100) : 0,
-      };
-      priceCache[sym] = { ...priceCache[sym], ...result[sym] };
+    
+    // Use cached data instead of fetching fresh snapshots
+    for (let i = 0; i < syms.length; i++) {
+      const sym = syms[i];
+      const cached = priceCache[sym];
+      
+      if (cached) {
+        result[i] = {
+          sym: cached.sym,
+          price: cached.price,
+          open: cached.open || 0,
+          high: cached.high || 0,
+          low: cached.low || 0,
+          close: cached.price,
+          prevClose: cached.prevClose || 0,
+          volume: cached.volume || 0,
+          change: cached.change || 0,
+          changePct: cached.changePct || 0,
+        };
+      } else {
+        result[i] = {
+          sym: sym,
+          price: 0,
+          open: 0,
+          high: 0,
+          low: 0,
+          close: 0,
+          prevClose: 0,
+          volume: 0,
+          change: 0,
+          changePct: 0,
+        };
+      }
     }
+    
     res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
