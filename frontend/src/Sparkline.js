@@ -1,5 +1,6 @@
-export default function Sparkline({ data = [], color = "#00ff88", width = 80, height = 30 }) {
+export default function Sparkline({ data = [], color = "#D4AF37", width = 80, height = 30 }) {
   if (data.length < 2) return null;
+  console.log('📈 Sparkline rendered:', { color, dataLength: data.length, data: data.slice(-3) });
   const min = Math.min(...data), max = Math.max(...data);
   const range = max - min || 1;
   const pts = data.map((v, i) => {

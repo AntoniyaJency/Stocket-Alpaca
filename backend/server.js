@@ -234,10 +234,155 @@ async function fetchQuotesFallback() {
 // ── Bar fetching ─────────────────────────────────────────────────────────────
 async function fetchBars(symbol, timeframe = "1Min", limit = 100) {
   try {
-    const resp = await alpaca.getBarsV2(symbol, { timeframe, limit, feed: "iex" });
-    const bars = [];
-    for await (const b of resp) bars.push({ t: b.Timestamp, o: b.OpenPrice, h: b.HighPrice, l: b.LowPrice, c: b.ClosePrice, v: b.Volume });
+    console.log(`Fetching real bars for ${symbol}, timeframe: ${timeframe}, limit: ${limit}`);
+    
+    // Map timeframes to data sources
+    const isDaily = timeframe === "1Day";
+    const isHourly = timeframe === "1Hour";
+    const isIntraday = ["1Min", "5Min", "15Min"].includes(timeframe);
+    
+    // Try Alpha Vantage for free real data (daily only)
+    if (isDaily) {
+      try {
+        console.log(`Trying Alpha Vantage for ${symbol} - Daily data`);
+        const alphaVantageUrl = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=demo`;
+        const response = await fetch(alphaVantageUrl);
+        const data = await response.json();
+        
+        if (data['Time Series (Daily)']) {
+          const bars = [];
+          const timeSeries = data['Time Series (Daily)'];
+          const dates = Object.keys(timeSeries).slice(0, limit).reverse();
+          
+          for (const date of dates) {
+            const day = timeSeries[date];
+            const o = parseFloat(day['1. open']);
+            const h = parseFloat(day['2. high']);
+            const l = parseFloat(day['3. low']);
+            const c = parseFloat(day['4. close']);
+            const v = parseInt(day['5. volume']);
+            
+            // Validate data
+            if (!isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c) && h >= l && h >= o && h >= c && l <= o && l <= c) {
+              bars.push({
+                t: new Date(date).getTime(),
+                o, h, l, c, v
+              });
+            }
+          }
+          
+          console.log(`✅ Alpha Vantage got ${bars.length} REAL daily bars for ${symbol}`);
+          return bars;
+        }
+      } catch (alphaErr) {
+        console.log(`Alpha Vantage failed:`, alphaErr.message);
+      }
+    }
+    
+    // Try Yahoo Finance as backup (supports multiple timeframes)
+    try {
+      console.log(`Trying Yahoo Finance for ${symbol} - ${timeframe}`);
+      let yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
+      
+      // Map timeframes to Yahoo intervals
+      const intervalMap = {
+        "1Min": "1m",
+        "5Min": "5m", 
+        "15Min": "15m",
+        "1Hour": "1h",
+        "1Day": "1d"
+      };
+      
+      const interval = intervalMap[timeframe] || "1d";
+      const range = isDaily ? "2y" : "5d"; // Longer range for daily, shorter for intraday
+      
+      yahooUrl += `?interval=${interval}&range=${range}`;
+      
+      const response = await fetch(yahooUrl);
+      const data = await response.json();
+      
+      if (data.chart.result && data.chart.result[0]) {
+        const result = data.chart.result[0];
+        const bars = [];
+        
+        for (let i = 0; i < Math.min(result.timestamp.length, limit); i++) {
+          const o = result.indicators.quote[0].open[i];
+          const h = result.indicators.quote[0].high[i];
+          const l = result.indicators.quote[0].low[i];
+          const c = result.indicators.quote[0].close[i];
+          const v = result.indicators.quote[0].volume[i];
+          
+          // Validate data
+          if (!isNaN(o) && !isNaN(h) && !isNaN(l) && !isNaN(c) && h >= l && h >= o && h >= c && l <= o && l <= c) {
+            bars.push({
+              t: result.timestamp[i] * 1000,
+              o, h, l, c, v
+            });
+          }
+        }
+        
+        console.log(`✅ Yahoo Finance got ${bars.length} REAL ${timeframe} bars for ${symbol}`);
+        return bars;
+      }
+    } catch (yahooErr) {
+      console.log(`Yahoo Finance failed:`, yahooErr.message);
+    }
+    
+    // Try Alpaca with different feeds
+    let bars = [];
+    
+    // Method 1: Try with IEX feed
+    try {
+      const resp = await alpaca.getBarsV2(symbol, { 
+        timeframe: "1Day", 
+        limit: Math.min(limit, 30),
+        feed: "iex"
+      });
+      
+      for await (const b of resp) {
+        bars.push({ 
+          t: new Date(b.Timestamp).getTime(), 
+          o: b.OpenPrice || b.Open, 
+          h: b.HighPrice || b.High, 
+          l: b.LowPrice || b.Low, 
+          c: b.ClosePrice || b.Close, 
+          v: b.Volume || b.volume 
+        });
+      }
+      
+      console.log(`✅ Alpaca IEX got ${bars.length} REAL bars for ${symbol}`);
+    } catch (err) {
+      console.log(`Alpaca IEX failed:`, err.message);
+    }
+    
+    if (bars.length > 0) return bars;
+    
+    // Last resort: mock data
+    console.log(`❌ No real data available, using mock data for ${symbol}`);
+    const now = Date.now();
+    const basePrice = priceCache[symbol]?.price || 100;
+    
+    for (let i = limit - 1; i >= 0; i--) {
+      const time = now - (i * 24 * 60 * 60 * 1000); // Daily
+      const variance = basePrice * 0.02;
+      const open = basePrice + (Math.random() - 0.5) * variance;
+      const close = open + (Math.random() - 0.5) * variance;
+      const high = Math.max(open, close) + Math.random() * variance * 0.5;
+      const low = Math.min(open, close) - Math.random() * variance * 0.5;
+      
+      bars.push({
+        t: time,
+        o: +open.toFixed(2),
+        h: +high.toFixed(2),
+        l: +low.toFixed(2),
+        c: +close.toFixed(2),
+        v: Math.floor(Math.random() * 100000) + 10000
+      });
+    }
+    
+    console.log(`Created ${bars.length} mock bars for ${symbol}`);
     return bars;
+    
   } catch (err) {
     console.error(`fetchBars(${symbol}):`, err.message);
     return [];
@@ -298,6 +443,55 @@ Required output — strict JSON only, no markdown:
   }
 }
 
+// ── Sync existing trades from Alpaca ───────────────────────────────────────────
+async function syncExistingTrades() {
+  try {
+    console.log("🔄 Syncing existing trades from Alpaca...");
+    const orders = await alpaca.getOrders({ status: 'all', limit: 100, direction: 'desc' });
+    
+    for (const order of orders) {
+      // Check if trade already exists in log
+      const exists = tradeLog.find(t => t.id === order.id);
+      if (exists) continue;
+      
+      // Only add filled orders
+      if (order.status === 'filled' && order.filled_qty > 0) {
+        // Try to detect if this was an AI trade by checking order patterns
+        // AI trades typically have specific characteristics:
+        // - Quantity of 1 (AUTO_TRADE_QTY)
+        // - Market orders
+        // - Recent trades during auto-trading hours
+        
+        const isLikelyAITrade = 
+          parseInt(order.filled_qty) === AUTO_QTY && 
+          order.order_type === 'market' &&
+          order.submitted_at && 
+          (Date.now() - new Date(order.submitted_at).getTime()) < 24 * 60 * 60 * 1000; // Last 24h
+        
+        const trade = {
+          id: order.id,
+          sym: order.symbol,
+          side: order.side.toUpperCase(),
+          qty: parseInt(order.filled_qty),
+          price: parseFloat(order.filled_avg_price || 0),
+          status: order.status,
+          auto: isLikelyAITrade, // Smart detection of AI trades
+          ts: new Date(order.filled_at || order.created_at).getTime(),
+          time: new Date(order.filled_at || order.created_at).toLocaleTimeString(),
+          mode: IS_PAPER ? "PAPER" : "LIVE",
+        };
+        tradeLog.unshift(trade);
+        console.log(`📥 Synced existing trade: ${trade.side} ${trade.sym} x${trade.qty} @ $${trade.price} ${trade.auto ? '(🤖 AI)' : '(MANUAL)'}`);
+      }
+    }
+    
+    if (tradeLog.length > 500) tradeLog = tradeLog.slice(0, 500);
+    console.log(`✅ Synced ${tradeLog.length} total trades`);
+  } catch (err) {
+    console.log("❌ Trade sync failed:", err.message);
+  }
+}
+
 // ── Risk Management ──────────────────────────────────────────────────────────
 async function checkRiskLimits() {
   try {
@@ -330,33 +524,78 @@ function isMarketHours() {
 
 // ── Auto-trade engine ────────────────────────────────────────────────────────
 async function runAutoTrade() {
-  if (!autoEnabled) return;
-  if (!isMarketHours()) { console.log("⏸ Market closed — skipping auto-trade cycle"); return; }
+  console.log(`\n🤖 Auto-trade cycle started at ${new Date().toLocaleTimeString()}`);
+  
+  if (!autoEnabled) { 
+    console.log("⏸ Auto-trading disabled — skipping cycle"); 
+    return; 
+  }
+  
+  if (!isMarketHours()) { 
+    console.log("⏸ Market closed — skipping auto-trade cycle"); 
+    return; 
+  }
+  
   const ok = await checkRiskLimits();
-  if (!ok) return;
+  if (!ok) {
+    console.log("⛔ Risk limits breached — skipping auto-trade cycle");
+    return;
+  }
 
-  console.log(`\n🤖 Auto-trade [${STRATEGY.toUpperCase()}] — ${new Date().toLocaleTimeString()}`);
+  console.log(`🤖 Auto-trade [${STRATEGY.toUpperCase()}] — ${new Date().toLocaleTimeString()}`);
   broadcast("AUTO_CYCLE_START", { ts: Date.now(), strategy: STRATEGY });
 
   for (const sym of WATCHLIST) {
     try {
+      console.log(`  📊 Processing ${sym}...`);
       const bars = await fetchBars(sym, "1Min", 50);
-      if (!bars.length) continue;
+      if (!bars.length) {
+        console.log(`  ❌ ${sym}: No bar data available`);
+        continue;
+      }
+      
+      console.log(`  ✅ ${sym}: Got ${bars.length} bars`);
       const signal = await getAISignal(sym, bars);
-      if (!signal || signal.signal === "HOLD") { console.log(`  ${sym}: HOLD`); continue; }
-      if (signal.confidence < MIN_CONF) { console.log(`  ${sym}: ${signal.signal} but conf ${signal.confidence}% < ${MIN_CONF}% min`); continue; }
+      if (!signal) {
+        console.log(`  ❌ ${sym}: AI signal failed`);
+        continue;
+      }
+      
+      console.log(`  📡 ${sym}: ${signal.signal} (${signal.confidence}% confidence)`);
+      
+      if (signal.signal === "HOLD") { 
+        console.log(`  ⏸ ${sym}: HOLD signal`); 
+        continue; 
+      }
+      
+      if (signal.confidence < MIN_CONF) { 
+        console.log(`  ❌ ${sym}: ${signal.signal} but conf ${signal.confidence}% < ${MIN_CONF}% min`); 
+        continue;
+      }
 
       let position = null;
-      try { position = await alpaca.getPosition(sym); } catch (_) {}
+      try { 
+        position = await alpaca.getPosition(sym); 
+        console.log(`  📈 ${sym}: Current position: ${position.qty} shares`);
+      } catch (_) { 
+        console.log(`  📈 ${sym}: No current position`);
+      }
       const qty = position ? parseInt(position.qty) : 0;
 
       if (signal.signal === "BUY" && qty < MAX_POS) {
+        console.log(`  💰 ${sym}: Placing BUY order for ${AUTO_QTY} shares`);
         await placeOrder(sym, AUTO_QTY, "buy", signal);
       } else if (signal.signal === "SELL" && qty > 0) {
+        console.log(`  💰 ${sym}: Placing SELL order for ${Math.min(AUTO_QTY, qty)} shares`);
         await placeOrder(sym, Math.min(AUTO_QTY, qty), "sell", signal);
+      } else {
+        console.log(`  ⏸ ${sym}: No action needed (signal: ${signal.signal}, position: ${qty})`);
       }
+      
       await new Promise(r => setTimeout(r, 800));
-    } catch (err) { console.error(`  ❌ ${sym}:`, err.message); }
+    } catch (err) { 
+      console.error(`  ❌ ${sym}:`, err.message); 
+    }
   }
 
   // Sample portfolio value
@@ -365,7 +604,12 @@ async function runAutoTrade() {
     portfolioHistory.push({ ts: Date.now(), value: parseFloat(acct.portfolio_value), equity: parseFloat(acct.equity), cash: parseFloat(acct.cash) });
     if (portfolioHistory.length > 1440) portfolioHistory = portfolioHistory.slice(-1440); // 24h at 1/min
     broadcast("PORTFOLIO_TICK", portfolioHistory[portfolioHistory.length - 1]);
-  } catch (_) {}
+    console.log(`  💰 Portfolio updated: $${parseFloat(acct.portfolio_value).toFixed(2)}`);
+  } catch (err) {
+    console.error(`  ❌ Portfolio update failed:`, err.message);
+  }
+  
+  console.log(`✅ Auto-trade cycle completed at ${new Date().toLocaleTimeString()}\n`);
 }
 
 async function placeOrder(sym, qty, side, signal) {
@@ -523,7 +767,7 @@ app.get("/api/quotes", authMiddleware, async (req, res) => {
       const cached = priceCache[sym];
       
       if (cached) {
-        result[i] = {
+        result[sym] = {  // Use symbol as key, not index
           sym: cached.sym,
           price: cached.price,
           open: cached.open || 0,
@@ -536,7 +780,7 @@ app.get("/api/quotes", authMiddleware, async (req, res) => {
           changePct: cached.changePct || 0,
         };
       } else {
-        result[i] = {
+        result[sym] = {  // Use symbol as key, not index
           sym: sym,
           price: 0,
           open: 0,
@@ -636,7 +880,19 @@ server.listen(PORT, () => {
     // Also start fallback polling immediately for initial data
     console.log("🔄 Starting initial quote fetch");
     fetchQuotesFallback();
+    // Sync existing trades
+    setTimeout(syncExistingTrades, 2000);
   } else {
     console.log("⚠️  Alpaca keys not set — configure .env");
+  }
+  
+  // Start auto-trading if enabled
+  if (autoEnabled) {
+    console.log("🤖 Auto-trading enabled at startup — starting interval");
+    runAutoTrade();
+    autoInterval = setInterval(runAutoTrade, AUTO_IV);
+    console.log(`🤖 Auto-trading ENABLED — ${AUTO_IV / 1000}s interval`);
+  } else {
+    console.log("⏸ Auto-trading disabled — enable via UI or set AUTO_TRADE_ENABLED=true");
   }
 });

@@ -8,6 +8,7 @@ import IndicatorPanel from "./IndicatorPanel";
 const TABS = ["CHART", "INDICATORS", "PORTFOLIO", "ORDERS", "TRADES", "ANALYTICS"];
 
 export default function Dashboard({ user, onLogout }) {
+  console.log('🔄 Dashboard rendered at:', new Date().toLocaleTimeString());
   const [health, setHealth]               = useState(null);
   const [account, setAccount]             = useState(null);
   const [positions, setPositions]         = useState([]);
@@ -32,6 +33,7 @@ export default function Dashboard({ user, onLogout }) {
   const [backendOk, setBackendOk]         = useState(null);
   const [marketOpen, setMarketOpen]       = useState(false);
   const [cycleFlash, setCycleFlash]       = useState(false);
+  const [barsLoading, setBarsLoading]     = useState(false);
   const priceHistory = useRef({});
   const startEquity  = useRef(null);
 
@@ -123,7 +125,25 @@ export default function Dashboard({ user, onLogout }) {
   // ── Bars + indicators when stock/tf changes ──────────────────────────────
   useEffect(() => {
     if (backendOk !== true) return;
-    api.bars(selected, tf, 100).then(setBars).catch(()=>setBars([]));
+    
+    const loadBars = async () => {
+      setBarsLoading(true);
+      try {
+        console.log(`Loading bars for ${selected} with timeframe ${tf}`);
+        const newBars = await api.bars(selected, tf, 100);
+        console.log(`Received ${newBars.length} bars for ${selected} (${tf})`);
+        setBars(newBars);
+      } catch (error) {
+        console.error(`Failed to load bars for ${selected}:`, error);
+        setBars([]);
+        notify(`Failed to load chart data for ${selected}`, "error");
+      } finally {
+        setBarsLoading(false);
+      }
+    };
+    
+    loadBars();
+    
     if (tab === "INDICATORS") {
       api.barsWithIndicators(selected).then(r => setIndicators(r.indicators)).catch(()=>{});
     }
@@ -239,7 +259,7 @@ export default function Dashboard({ user, onLogout }) {
                 <div className="wi-price">{q.price?"$"+q.price.toFixed(2):"—"}</div>
                 <div className="wi-bottom">
                   <span className={up?"green":"red"}>{up?"▲":"▼"} {Math.abs(q.changePct||0).toFixed(2)}%</span>
-                  <Sparkline data={hist.slice(-20)} color={up?"#00ff88":"#ff4466"} width={52} height={22} />
+                  <Sparkline data={hist.slice(-20)} color={up?"#D4AF37":"#E74C3C"} width={52} height={22} />
                 </div>
               </div>
             );
@@ -285,8 +305,40 @@ export default function Dashboard({ user, onLogout }) {
           {tab==="CHART"&&(
             <div className="tab-content">
               <div className="chart-controls">
-                {["1Min","5Min","15Min","1Hour","1Day"].map(t=><button key={t} className={"tf-btn"+(tf===t?" active":"")} onClick={()=>setTf(t)}>{t}</button>)}
-                <button className="btn-secondary ml-auto" onClick={scanAll} disabled={scanLoading}>{scanLoading?"SCANNING...":"⚡ SCAN ALL"}</button>
+                <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                  {["1Min","5Min","15Min","1Hour","1Day"].map(timeframe => (
+                    <button 
+                      key={timeframe} 
+                      className={"tf-btn" + (tf === timeframe ? " active" : "") + (barsLoading ? " loading" : "")}
+                      onClick={() => {
+                        if (!barsLoading) {
+                          console.log(`Switching to timeframe: ${timeframe}`);
+                          setTf(timeframe);
+                        }
+                      }}
+                      disabled={barsLoading}
+                      style={{
+                        opacity: barsLoading ? 0.6 : 1,
+                        cursor: barsLoading ? "not-allowed" : "pointer",
+                        position: "relative"
+                      }}
+                    >
+                      {barsLoading && tf === timeframe && (
+                        <span style={{
+                          position: "absolute",
+                          top: "50%",
+                          left: "50%",
+                          transform: "translate(-50%, -50%)",
+                          fontSize: "10px"
+                        }}>⏳</span>
+                      )}
+                      {timeframe}
+                    </button>
+                  ))}
+                </div>
+                <button className="btn-secondary ml-auto" onClick={scanAll} disabled={scanLoading || barsLoading}>
+                  {scanLoading ? "SCANNING..." : barsLoading ? "LOADING..." : "⚡ SCAN ALL"}
+                </button>
               </div>
               <div className="chart-wrapper"><CandleChart bars={bars}/></div>
               {selSig&&(
@@ -309,7 +361,7 @@ export default function Dashboard({ user, onLogout }) {
                   return(<div key={sym} className={"market-card"+(selected===sym?" active":"")} onClick={()=>setSelected(sym)}>
                     <div className="mc-top"><span className="mc-sym">{sym}</span>{sig&&<span className={"sig-badge sig-"+sig.signal?.toLowerCase()}>{sig.signal}</span>}</div>
                     <div className="mc-price">{q.price?"$"+q.price.toFixed(2):"—"}</div>
-                    <div className="mc-bottom"><span className={up?"green":"red"}>{up?"▲":"▼"} {Math.abs(q.changePct||0).toFixed(2)}%</span><Sparkline data={hist.slice(-20)} color={up?"#00ff88":"#ff4466"} width={64} height={26}/></div>
+                    <div className="mc-bottom"><span className={up?"green":"red"}>{up?"▲":"▼"} {Math.abs(q.changePct||0).toFixed(2)}%</span><Sparkline data={hist.slice(-20)} color={up?"#D4AF37":"#E74C3C"} width={64} height={26}/></div>
                     {sig?.confidence&&<div className="mc-conf">{sig.confidence}% · {sig.strategy||""}</div>}
                   </div>);
                 })}
@@ -402,7 +454,10 @@ export default function Dashboard({ user, onLogout }) {
                     <td>{o.qty}</td><td>{o.filledQty}</td>
                     <td>{o.filledPrice?"$"+o.filledPrice.toFixed(2):"—"}</td>
                     <td><span className={"status-badge status-"+o.status}>{o.status}</span></td>
-                    <td>{["new","accepted","pending_new"].includes(o.status)&&<button className="btn-cancel" onClick={()=>cancelOrder(o.id)}>CANCEL</button>}</td>
+                    <td>
+                      {["new","accepted","pending_new","partially_filled"].includes(o.status)&&<button className="btn-cancel" onClick={()=>cancelOrder(o.id)}>CANCEL</button>}
+                      {["filled","canceled","expired","rejected"].includes(o.status)&&<span className="dim">—</span>}
+                    </td>
                   </tr>
                 ))}</tbody></table>
               )}

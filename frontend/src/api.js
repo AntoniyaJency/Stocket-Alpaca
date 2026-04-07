@@ -1,4 +1,4 @@
-const BASE = process.env.REACT_APP_API_URL || "http://localhost:3001";
+const BASE = process.env.REACT_APP_API_URL || "http://localhost:3002";
 
 // ── Token management ────────────────────────────────────────────────────────
 let _token = localStorage.getItem("algotrade_token") || "";
@@ -52,13 +52,50 @@ export const api = {
 export function createWebSocket(onMessage) {
   const wsUrl = BASE.replace(/^http/, "ws");
   let ws, reconnectTimer;
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 10;
+  
   function connect() {
-    ws = new WebSocket(wsUrl);
-    ws.onopen = () => console.log("WS connected");
-    ws.onmessage = e => { try { onMessage(JSON.parse(e.data)); } catch (_) {} };
-    ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000); };
-    ws.onerror = () => ws.close();
+    try {
+      console.log(`🔌 Connecting to WebSocket (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        console.log("✅ WS connected");
+        reconnectAttempts = 0; // Reset on successful connection
+      };
+      
+      ws.onmessage = e => { 
+        try { 
+          onMessage(JSON.parse(e.data)); 
+        } catch (err) {
+          console.log("❌ WS message parse error:", err);
+        }
+      };
+      
+      ws.onclose = (event) => {
+        console.log(`🔌 WS closed (code: ${event.code}), reconnecting in 5s...`);
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          reconnectTimer = setTimeout(connect, 5000);
+        } else {
+          console.log("❌ Max reconnect attempts reached");
+        }
+      };
+      
+      ws.onerror = (err) => {
+        console.log("❌ WS error:", err);
+        ws.close();
+      };
+    } catch (err) {
+      console.log("❌ WS connection error:", err);
+      if (reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
+        reconnectTimer = setTimeout(connect, 5000);
+      }
+    }
   }
+  
   connect();
   return { close: () => { clearTimeout(reconnectTimer); ws?.close(); } };
 }

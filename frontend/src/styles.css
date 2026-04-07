@@ -287,10 +287,21 @@ body {
 .tf-btn {
   background: transparent; border: 1px solid #4A3F7A; color: #A0A0A0;
   padding: 5px 10px; cursor: pointer; font-family: inherit; font-size: 10px;
-  letter-spacing: 1px; transition: all 0.15s;
+  letter-spacing: 1px; transition: all 0.15s; position: relative;
 }
 .tf-btn.active { border-color: #D4AF37; color: #D4AF37; background: rgba(212, 175, 55, 0.05); }
 .tf-btn:hover { border-color: rgba(212, 175, 55, 0.3); color: #B8941F; }
+.tf-btn.loading { 
+  border-color: #FFAA00; 
+  color: #FFAA00; 
+  background: rgba(255, 170, 0, 0.05);
+  animation: pulse 1.5s infinite;
+}
+.tf-btn:disabled {
+  opacity: 0.4; 
+  cursor: not-allowed; 
+  pointer-events: none;
+}
 .btn-secondary {
   background: transparent; border: 1px solid #4A3F7A; color: #A0A0A0;
   padding: 5px 12px; cursor: pointer; font-family: inherit; font-size: 10px;
@@ -299,7 +310,10 @@ body {
 .btn-secondary:hover:not(:disabled) { border-color: rgba(212, 175, 55, 0.3); color: #D4AF37; }
 .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
 .chart-wrapper {
-  background: #3A2F5A; border: 1px solid #4A3F7A; padding: 12px 8px 8px;
+  background: #3A2F5A;
+  border: 1px solid #4A3F7A;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
 /* Signal detail */
