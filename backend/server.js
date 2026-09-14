@@ -49,7 +49,7 @@ const WATCHLIST = ["AAPL","TSLA","NVDA","MSFT","GOOGL","AMZN","META","NFLX"];
 
 // ── Express ──────────────────────────────────────────────────────────────────
 const app = express();
-app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 app.use("/api/", rateLimit({ windowMs: 60000, max: 200 }));
 const server = http.createServer(app);
