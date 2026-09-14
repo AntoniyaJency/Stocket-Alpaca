@@ -1,0 +1,45 @@
+services:
+  # Backend Service
+  - type: web
+    name: algotrade-backend
+    runtime: node
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && npm start
+    envVars:
+      - key: PORT
+        value: 3002
+      - key: ALPACA_KEY_ID
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
+      - key: ALPACA_MODE
+        value: paper
+      - key: GROQ_API_KEY
+        sync: false
+      - key: AUTO_TRADE_ENABLED
+        value: "false"
+      - key: AUTO_TRADE_QTY
+        value: 1
+      - key: AUTO_TRADE_MAX_POSITION
+        value: 5
+      - key: AUTO_TRADE_INTERVAL_SECONDS
+        value: 60
+      - key: MIN_CONFIDENCE
+        value: 65
+      - key: DAILY_LOSS_LIMIT_PCT
+        value: 5
+      - key: STRATEGY
+        value: combined
+
+  # Frontend Service
+  - type: web
+    name: algotrade-frontend
+    runtime: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/build
+    envVars:
+      - key: REACT_APP_API_URL
+        fromService:
+          type: web
+          name: algotrade-backend
+          property: host
