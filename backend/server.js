@@ -154,67 +154,27 @@ async function fetchQuotesFallback() {
     console.log('Fetching quotes for:', WATCHLIST);
     for (const sym of WATCHLIST) {
       try {
-        // Use Alpaca REST API directly for quotes
+        // Use Yahoo Finance as primary data source (free, no API key needed)
         let price = 0, bid = 0, ask = 0, prevClose = 0;
         
         try {
-          // Get latest trade via REST API
-          const tradeUrl = `${IS_PAPER ? 'https://paper-api.alpaca.markets' : 'https://api.alpaca.markets'}/v2/stocks/${sym}/trades/latest`;
-          const tradeRes = await fetch(tradeUrl, {
-            headers: {
-              'APCA-API-KEY-ID': process.env.ALPACA_KEY_ID,
-              'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
-            }
-          });
-          const tradeData = await tradeRes.json();
-          if (tradeData.trade && tradeData.trade.p) {
-            price = tradeData.trade.p;
-            console.log(`Using LatestTrade for ${sym}: ${price}`);
-          }
-        } catch (tradeErr) {
-          console.log(`LatestTrade failed for ${sym}:`, tradeErr.message);
-        }
-        
-        try {
-          // Get latest quote via REST API
-          const quoteUrl = `${IS_PAPER ? 'https://paper-api.alpaca.markets' : 'https://api.alpaca.markets'}/v2/stocks/${sym}/quotes/latest`;
-          const quoteRes = await fetch(quoteUrl, {
-            headers: {
-              'APCA-API-KEY-ID': process.env.ALPACA_KEY_ID,
-              'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
-            }
-          });
-          const quoteData = await quoteRes.json();
-          if (quoteData.quote) {
-            bid = quoteData.quote.bp || 0;
-            ask = quoteData.quote.ap || 0;
-            if (price === 0 && bid > 0 && ask > 0) {
-              price = (bid + ask) / 2;
-              console.log(`Using LatestQuote for ${sym}: ${price} (bid: ${bid}, ask: ${ask})`);
+          const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}`;
+          const response = await fetch(yahooUrl);
+          const data = await response.json();
+          
+          if (data.chart && data.chart.result && data.chart.result[0]) {
+            const meta = data.chart.result[0].meta;
+            const regularMarketPrice = meta.regularMarketPrice;
+            const previousClose = meta.previousClose;
+            
+            if (regularMarketPrice) {
+              price = regularMarketPrice;
+              prevClose = previousClose || regularMarketPrice;
+              console.log(`Yahoo Finance for ${sym}: $${price} (prev close: $${prevClose})`);
             }
           }
-        } catch (quoteErr) {
-          console.log(`LatestQuote failed for ${sym}:`, quoteErr.message);
-        }
-        
-        try {
-          // Get daily bars via REST API for previous close
-          const barsUrl = `${IS_PAPER ? 'https://paper-api.alpaca.markets' : 'https://api.alpaca.markets'}/v2/stocks/${sym}/bars?timeframe=1Day&limit=2`;
-          const barsRes = await fetch(barsUrl, {
-            headers: {
-              'APCA-API-KEY-ID': process.env.ALPACA_KEY_ID,
-              'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
-            }
-          });
-          const barsData = await barsRes.json();
-          if (barsData.bars && barsData.bars.length >= 1) {
-            const latestBar = barsData.bars[barsData.bars.length - 1];
-            prevClose = latestBar.c;
-            if (price === 0) price = prevClose;
-            console.log(`Using DailyBar for ${sym}: ${price}`);
-          }
-        } catch (barsErr) {
-          console.log(`DailyBars failed for ${sym}:`, barsErr.message);
+        } catch (yahooErr) {
+          console.log(`Yahoo Finance failed for ${sym}:`, yahooErr.message);
         }
         
         // Update cache if we got valid data
