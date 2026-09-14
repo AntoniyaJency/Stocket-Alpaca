@@ -154,39 +154,49 @@ async function fetchQuotesFallback() {
     console.log('Fetching quotes for:', WATCHLIST);
     for (const sym of WATCHLIST) {
       try {
-        // Get individual snapshot for each symbol
-        const snapshot = await alpaca.getSnapshot(sym);
-        
-        // Use correct field names from the actual data structure
+        // Get latest trade and quote using correct Alpaca API methods
         let price = 0, bid = 0, ask = 0, prevClose = 0;
         
-        // Method 1: Use latest trade if available
-        if (snapshot.LatestTrade && snapshot.LatestTrade.Price) {
-          price = snapshot.LatestTrade.Price;
-          console.log(`Using LatestTrade for ${sym}: ${price}`);
-        }
-        
-        // Method 2: Use latest quote bid/ask
-        if (snapshot.LatestQuote) {
-          bid = snapshot.LatestQuote.BidPrice || 0;
-          ask = snapshot.LatestQuote.AskPrice || 0;
-          if (price === 0 && bid > 0 && ask > 0) {
-            price = (bid + ask) / 2;
-            console.log(`Using LatestQuote for ${sym}: ${price} (bid: ${bid}, ask: ${ask})`);
+        try {
+          const latestTrade = await alpaca.getLatestTrade(sym);
+          if (latestTrade && latestTrade.price) {
+            price = latestTrade.price;
+            console.log(`Using LatestTrade for ${sym}: ${price}`);
           }
+        } catch (tradeErr) {
+          console.log(`LatestTrade failed for ${sym}:`, tradeErr.message);
         }
         
-        // Method 3: Use daily bar close
-        if (snapshot.DailyBar && snapshot.DailyBar.ClosePrice) {
-          prevClose = snapshot.DailyBar.ClosePrice;
-          if (price === 0) price = prevClose;
-          console.log(`Using DailyBar for ${sym}: ${price}`);
+        try {
+          const latestQuote = await alpaca.getLatestQuote(sym);
+          if (latestQuote) {
+            bid = latestQuote.bid_price || 0;
+            ask = latestQuote.ask_price || 0;
+            if (price === 0 && bid > 0 && ask > 0) {
+              price = (bid + ask) / 2;
+              console.log(`Using LatestQuote for ${sym}: ${price} (bid: ${bid}, ask: ${ask})`);
+            }
+          }
+        } catch (quoteErr) {
+          console.log(`LatestQuote failed for ${sym}:`, quoteErr.message);
         }
         
-        // Method 4: Use previous daily bar for comparison
-        if (snapshot.PrevDailyBar && snapshot.PrevDailyBar.ClosePrice && prevClose === 0) {
-          prevClose = snapshot.PrevDailyBar.ClosePrice;
-          console.log(`Using PrevDailyBar for ${sym}: ${prevClose}`);
+        try {
+          const bars = await alpaca.getBarsV2(sym, {
+            timeframe: '1Day',
+            limit: 2
+          });
+          const barArray = Array.from(bars);
+          if (barArray.length >= 1) {
+            const latestBar = barArray[barArray.length - 1];
+            if (latestBar.ClosePrice) {
+              prevClose = latestBar.ClosePrice;
+              if (price === 0) price = prevClose;
+              console.log(`Using DailyBar for ${sym}: ${price}`);
+            }
+          }
+        } catch (barsErr) {
+          console.log(`getBarsV2 failed for ${sym}:`, barsErr.message);
         }
         
         // Update cache if we got valid data
